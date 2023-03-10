@@ -1,0 +1,128 @@
+---
+version: "3"
+
+networks:
+  loki:
+
+services:
+  read:
+    container_name: loki-read
+    image: grafana/loki:2.7.4
+    command: "-config.file=/etc/loki/config.yaml -target=read"
+    ports:
+      - 3101:3100
+      - 7946
+      - 9095
+    volumes:
+      - ./config/loki/config.yaml:/etc/loki/config.yaml
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3100/ready || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      - minio
+    networks: &loki-dns
+      loki:
+        aliases:
+          - loki
+
+  write:
+    container_name: loki-write
+    image: grafana/loki:2.7.4
+    command: "-config.file=/etc/loki/config.yaml -target=write"
+    ports:
+      - 3102:3100
+      - 7946
+      - 9095
+    volumes:
+      - ./config/loki/config.yaml:/etc/loki/config.yaml
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3100/ready || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      - minio
+    networks:
+      <<: *loki-dns
+
+  promtail:
+    container_name: promtail
+    image: grafana/promtail:2.7.4
+    volumes:
+      - ./config/promtail/config.yaml:/etc/promtail/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: -config.file=/etc/promtail/config.yaml
+    depends_on:
+      - gateway
+    networks:
+      - loki
+
+  minio:
+    container_name: minio
+    image: minio/minio:RELEASE.2023-02-27T18-10-45Z
+    entrypoint:
+      - sh
+      - -euc
+      - minio server /data
+    env_file:
+      - "./config/minio/env.minio"
+    ports:
+      - 9000
+    volumes:
+      - ./data/minio:/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 15s
+      timeout: 20s
+      retries: 5
+    networks:
+      - loki
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana-oss:9.4.3
+    volumes:
+      - ./data/grafana:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning
+    env_file:
+      - "./config/grafana/env.grafana"
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      - gateway
+    networks:
+      - loki
+
+  gateway:
+    container_name: nginx-gateway
+    image: nginx:1.23.3-alpine
+    volumes:
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3100"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      - read
+      - write
+    networks:
+      - loki
+
+  flog:
+    container_name: flog
+    image: mingrammer/flog
+    command: -f json -d 1s -l
+    environment:
+      - DOCKER_DEFAULT_PLATFORM=linux/amd64
+    networks:
+      - loki
