@@ -124,5 +124,7 @@ services:
     command: -f json -d 1s -l
     environment:
       - DOCKER_DEFAULT_PLATFORM=linux/amd64
+    labels:
+      logging: "promtail"
     networks:
       - loki
